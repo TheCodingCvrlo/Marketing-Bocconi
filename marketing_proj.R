@@ -34,7 +34,7 @@ data = data[data$sector == 1,]
 sales_by_year = summarise_at(group_by(data, year), vars(sales), funs(sum))
 colnames(sales_by_year) <- c("year", "tot_sales")
 
-fig1 <-  plot_ly(x = sales_by_year$year, y = sales_by_year$sales, type = 'bar') %>%
+fig1 <-  plot_ly(x = sales_by_year$year, y = sales_by_year$tot_sales, type = 'bar') %>%
   layout(title = 'Market Size by Year',
          plot_bgcolor='#e5ecf6', 
          xaxis = list( 
@@ -103,11 +103,15 @@ fig3
 
 # TODO: rd vs advertising STACKED, diff colours
 
-rd_ad_year = summarise_at(group_by(data, year), vars(ad,rd), funs(sum))
+rd_ad_year = summarise_at(group_by(data, year), vars(ad, rd), funs(sum))
+rd_ad_year$rd_ratio = rd_ad_year$rd/sales_by_year$tot_sales
 
+#
 
-
-
+fig4 <- plot_ly(x = rd_ad_year$year, y = rd_ad_year$rd, type = "bar", name = "R&D Spending")
+fig4 <- fig4 %>% add_trace(y = rd_ad_year$ad, name = "Advertising Spending") 
+fig4 <- fig4 %>% layout(yaxis = list(title = "Total"), barmode = "stack")
+fig4
 
 
 

@@ -235,9 +235,16 @@ data$sdev_mv <- sd3years_mv()
 data <- subset(data, sdev_rom != 0)
 
 #extra control variables:
-
+#roa 
 data$roa = data$earnings/data$assets
 
+#hhi
+data <- list(data, hhi_year) 
+data = data %>% reduce(full_join, by = data$year)
+
+#rd/sales
+data$rd_ratio = data$rd/data$sales
+data$ad_ratio = data$ad/data$sales
 
 
 #export
@@ -251,22 +258,14 @@ write_csv(data, "C:\\Users\\carlo\\Desktop\\MARKETING\\SCRIPTS\\data_clean.csv")
 
 
 
+form <- sales ~ rd + ad + rd*ad + hhi + log(assets)
+
+wi <- plm(form, data, model = "within")
+re <- plm(form, data, model = "random")
 
 
+#hausman test tells me I can use re
+phtest(wi, re)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+summary(re)
 

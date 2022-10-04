@@ -10,6 +10,8 @@ library(lmtest)
 library(tseries)
 library(tidyverse)
 library(plotly)
+library(corrplot)
+library(stringr)
 
 #env cleanup
 rm(list = ls())
@@ -19,18 +21,17 @@ current_path = rstudioapi::getActiveDocumentContext()$path
 current_dir = dirname(current_path)
 
 #importing data
-data <- read.csv(paste(current_dir,"DATA//Marketing Insight.csv", sep = "/"))
+df <- read.csv(paste(current_dir,"DATA//Marketing Insight.csv", sep = "/"))
 
 #filtering for Manufacturing Sector
-data = data[data$sector == 1,]
-#dropping null
-data <- drop_na(data)
-data <- data[order(data$id, data$year),]
+df = df[df$sector == 1,]
 
-#### Descriptive Stats ####
+#dropping null
+df <- drop_na(df)
+df <- df[order(df$id, df$year),]
 
 # checking magnitude of panel imbalance:
-obs_count = summarise_at(group_by(data, id), vars(year), funs("length"))
+obs_count = summarise_at(group_by(df, id), vars(year), funs("length"))
 colnames(obs_count) = c("id", "n_obs")
 
 obs_list = list()
@@ -39,162 +40,112 @@ for (i in range) {
   n_rows = nrow(obs_count[obs_count$n_obs >= i,])/299
   obs_list <- append(obs_list, n_rows)
 }
-############# IGNORE 
-vline <- function(x = 0, color = "red") {
-  list(
-    type = "line",
-    y0 = 0,
-    y1 = 1,
-    yref = "paper",
-    x0 = x,
-    x1 = x,
-    line = list(color = color, dash="dot")
-  )
-}
-################################################# END
 
-#### OBSERVATION THRESHOLDS ####
-fig0 = plot_ly(x = range, y = obs_list, type = "bar") %>%
-  layout(title = "% observations at different thresholds", shapes = vline(2.5)) %>%
-  add_text(showlegend = FALSE, x = 3, y = -0.1, text = "3", color = 'red')
-fig0
+# removing too_small firm series 
+under_4 <- subset(obs_count,n_obs<=3)$id
+df <- subset(df, !(id %in% under_4))
 
-#removing too_small firm series
-under_4 <- subset(obs_count,n_obs<=4)$id
-data <- subset(data, !(id %in% under_4))
+###################### Additional Variables ###############################
 
-# market size
-sales_by_year = summarise_at(group_by(data, year), vars(sales), funs(sum))
+# aggregated sales
+sales_by_year = summarise_at(group_by(df, year), vars(sales), funs(sum))
 colnames(sales_by_year) <- c("year", "tot_sales")
 
-#### MARKET SIZE GRAPH ####
-fig1 <-  plot_ly(x = sales_by_year$year, y = sales_by_year$tot_sales, type = 'bar') %>%
-  layout(title = 'Market Size by Year',
-         plot_bgcolor='#e5ecf6', 
-         xaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'), 
-         yaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'))
+# adding to main df
+df = list(df, sales_by_year)
+df = df %>% reduce(full_join, by = df$year)
 
-fig1
-
-
-# Market Competition
-comps_by_year = summarise_at(group_by(data, year), vars(id),funs(length))
-
-#### MARKET COMPETITION GRAPH ####
-fig2 <-  plot_ly(x = comps_by_year$year, y = comps_by_year$id, type = 'bar') %>%
-  layout(title = 'Number of Competitors by Year',
-         plot_bgcolor='#e5ecf6', 
-         xaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'), 
-         yaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'))
-fig2
-
-
-
-data = list(data, sales_by_year)
-data = data %>% reduce(full_join, by = data$year)
-
-data$share = (data$sales/data$tot_sales)*100 #multiplied to compute hhi easily
-
-shares = data[c("year", "share")]
-shares$share_sq = data$share^2
-hhi_year = summarise_at(group_by(shares, year),vars(share_sq), funs(sum))
+# shares; shares^2, hhi
+df$share = (df$sales/df$tot_sales)*100 #multiplied to compute hhi easily
+df$share_sq = df$share^2
+hhi_year = summarise_at(group_by(df, year),vars(share_sq), funs(sum))
 colnames(hhi_year) <- c("year", "hhi")
 
-#### HHI GRAPH ####
-fig3 <-  plot_ly(x = hhi_year$year, y = hhi_year$hhi, type = 'bar') %>%
-  layout(title = 'HH Index by Year',
-         plot_bgcolor='#e5ecf6', 
-         xaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'), 
-         yaxis = list( 
-           zerolinecolor = '#ffff', 
-           zerolinewidth = 2, 
-           gridcolor = 'ffff'))
-fig3
+# adding hhi to main df
+df = list(df, hhi_year)
+df = df %>% reduce(full_join, by = df$year)
 
-
-
-#R&D vs Ads Spending
-rd_ad_year = summarise_at(group_by(data, year), vars(ad, rd), funs(sum))
+# aggregated ad/rd spending
+rd_ad_year = summarise_at(group_by(df, year), vars(ad, rd, mkt), funs(sum))
+rd_ad_year$tot_spending = rd_ad_year$ad + rd_ad_year$rd
 rd_ad_year$rd_ratio = rd_ad_year$rd/sales_by_year$tot_sales
+rd_ad_year$ad_ratio = rd_ad_year$ad/sales_by_year$tot_sales
+rd_ad_year$mkt_ratio = rd_ad_year$mkt/sales_by_year$tot_sales
+#roa 
+df$roa = df$earnings/df$assets
 
-#### RD VS ADS ABSOLUTE
-fig4 <- plot_ly(x = rd_ad_year$year, y = rd_ad_year$rd, type = "bar", name = "R&D Spending")
-fig4 <- fig4 %>% add_trace(y = rd_ad_year$ad, name = "Advertising Spending") 
-fig4 <- fig4 %>% layout(yaxis = list(title = "Total"), barmode = "stack")
-fig4
+#rd/sales
+df$rd_ratio = df$rd/df$sales
+df$ad_ratio = df$ad/df$sales
 
-attach(rd_ad_year)
-rd_ad_year$tot_spending = ad + rd
+#logassets
+df$log_assets = log(df$assets)
 
-#### RD VS ADS RELATIVE
-fig5 <- plot_ly(x = year, y = rd/tot_spending, type = "bar", name = "%R&D")
-fig5 <- fig5 %>% add_trace(y = ad/tot_spending, name = "%Ad")
-fig5 <- fig5 %>% layout(yaxis = list(title = "% Spending"), barmode = "group")
-detach(rd_ad_year)
-fig5
+df2 = df
 
+#################### Discontinuities ##############################
 
-
-#### CREATING RISK MEASURE ####
-data$rom <- rep(0,nrow(data))
-
-
-
-#computing returns on market
-add_rom <- function() {
-  rom <- data$rom
-  for (firm in unique(data$id)) {
-    
-    years = unique(data[data$id == firm,]$year)
+find_error <- function() {
+  broken_ids = list()
+  for (firm in unique(df$id)) {
+    years = unique(df[df$id == firm,]$year)
     l = length(years)
-     
-    firm_data = data[data$id ==  firm,]
+    for (y in 2:l) { #sanity check 4 consecutive years?
+      t = years[y]
+      t_1 = years[y-1]
+      if (t - t_1 > 1) {
+        print(str_glue("MISSING OBSERVATION AT id = {firm}, year = {t}"))
+        broken_ids = append(broken_ids, firm)
+      }
+    }
+  }
+  return(broken_ids)
+}
+
+broken_ids <- find_error()
+
+df_balanced <- subset(df, !(id %in% broken_ids))
+
+######################## CREATING RISK MEASURE ###############################
+
+df$rom <- rep(0,nrow(df))
+
+# computing rom
+add_rom <- function() {
+  rom <- df$rom
+  broken_ids = list()
+  for (firm in unique(df$id)) {
+    years = unique(df[df$id == firm,]$year)
+    l = length(years)
+    firm_data = df[df$id ==  firm,]
     # print(firm_data)
     for (y in 2:l) { #sanity check 4 consecutive years?
       t = years[y]
       t_1 = years[y-1]
-      
+      if (t - t_1 > 1) {
+        print(str_glue("MISSING OBSERVATION AT id = {firm}, year = {t}"))
+        append(broken_ids, firm)
+      }
       replacement = firm_data[firm_data$year == t,]$mv - firm_data[firm_data$year == t_1,]$mv
-      # print("TO REPLACE:")
-      # print(data[data$id == firm & data$year == t,]$rom)
-      # print("REPLACEMENT:")
-      # print(replacement)
-      
-      #might be wrong oopsie (replace on data index, not on rom index)
-      rom <- replace(rom, data$id == firm & data$year == t, replacement )
+      rom <- replace(rom, df$id == firm & df$year == t, replacement )
     }
   }
   return(rom)
 }
 
+df$rom <- add_rom()
 
-data$rom <- add_rom()
 
-#computing standard deviation on 3years
 
+#computing standard deviation on 3 years
 
 sd3years_rom <- function() {
-  sd_3 <- rep(0,nrow(data))
-  for (firm in unique(data$id)) {
-    years = unique(data[data$id == firm,]$year)
+  sd_3 <- rep(0,nrow(df))
+  for (firm in unique(df$id)) {
+    years = unique(df[df$id == firm,]$year)
     l = length(years)
     
-    firm_data = data[data$id ==  firm,]
+    firm_data = df[df$id ==  firm,]
     # print(firm_data)
     for (y in 3:l) {
       t = years[y]
@@ -202,19 +153,19 @@ sd3years_rom <- function() {
       focus = subset(firm_data, (year <= t & year >= t_3))$rom
         
       replacement = sd(focus)
-      sd_3 <- replace(sd_3, data$id == firm & data$year == t, replacement)
+      sd_3 <- replace(sd_3, df$id == firm & df$year == t, replacement)
     }
   }
   return(sd_3)
 }
 
 sd3years_mv <- function() {
-  sd_3 <- rep(0,nrow(data))
-  for (firm in unique(data$id)) {
-    years = unique(data[data$id == firm,]$year)
+  sd_3 <- rep(0,nrow(df))
+  for (firm in unique(df$id)) {
+    years = unique(df[df$id == firm,]$year)
     l = length(years)
     
-    firm_data = data[data$id ==  firm,]
+    firm_data = df[df$id ==  firm,]
     # print(firm_data)
     for (y in 3:l) {
       t = years[y]
@@ -222,50 +173,306 @@ sd3years_mv <- function() {
       focus = subset(firm_data, (year <= t & year >= t_3))$mv
       
       replacement = sd(focus)
-      sd_3 <- replace(sd_3, data$id == firm & data$year == t, replacement)
+      sd_3 <- replace(sd_3, df$id == firm & df$year == t, replacement)
     }
   }
   return(sd_3)
 }
 
-data$sdev_rom <- sd3years_rom()
-data$sdev_mv <- sd3years_mv()
+df$sdev_rom <- sd3years_rom()
+df$sdev_mv <- sd3years_mv()
 
 #removing insufficient datapoints
-data <- subset(data, sdev_rom != 0)
+df <- subset(df, sdev_rom != 0)
 
-#extra control variables:
-#roa 
-data$roa = data$earnings/data$assets
+############################### Export ###################################
 
-#hhi
-data <- list(data, hhi_year) 
-data = data %>% reduce(full_join, by = data$year)
+write_csv(df, "C:\\Users\\carlo\\Desktop\\MARKETING\\SCRIPTS\\data_clean.csv")
 
-#rd/sales
-data$rd_ratio = data$rd/data$sales
-data$ad_ratio = data$ad/data$sales
-
-
-#export
-write_csv(data, "C:\\Users\\carlo\\Desktop\\MARKETING\\SCRIPTS\\data_clean.csv")
-
-
-# TODO:
-  #check correlations
-  #check values (eg mkt>0)
-  #hausman test
-
-
+############################## REGRESSION ################################à
 
 form <- sales ~ rd + ad + rd*ad + hhi + log(assets)
 
-wi <- plm(form, data, model = "within")
-re <- plm(form, data, model = "random")
+wi <- plm(form, df, model = "within")
+re <- plm(form, df, model = "random")
 
-
-#hausman test tells me I can use re
+#hausman test
 phtest(wi, re)
-
 summary(re)
+
+
+
+
+######################## Lagged Terms ##############################
+
+df2$lagged_rd = rep(0,nrow(df2))
+df2$lagged_rd[2:nrow(df2)] = df2$rd[1:(nrow(df2)-1)]
+
+df2$lagged_ad = rep(0,nrow(df2))
+df2$lagged_ad[2:nrow(df2)] = df2$ad[1:(nrow(df2)-1)]
+
+df2 = subset(df2, lagged_rd != 0)
+
+###################### Correlation MAtrix ########################
+
+regvars = c("sales","hhi", "roa", "lagged_rd", "lagged_ad", "threat", "log_assets")
+regdata = subset(df2, select = regvars)
+corrs = cor(regdata)[,c(7:1)]
+
+corrs[upper.tri(corrs)] = NA
+
+fig_m = plot_ly(
+  x = regvars,
+  y = regvars[7:1],
+  z = corrs,
+  type = "heatmap",
+  colors = "Reds",
+  colorbar = list(
+    len = 1
+  )
+) %>%
+  layout(
+    yaxis = list(
+      showgrid = FALSE
+    ),
+    xaxis = list(
+      showgrid = FALSE
+    )
+  )
+fig_m
+
+################### Dummies ####################
+
+
+################### Visuals #######################
+
+vline <- function(x = 0, color = "red") {
+  list(
+    type = "line",
+    y0 = -0.1,
+    y1 = 1,
+    yref = "paper",
+    x0 = x,
+    x1 = x,
+    line = list(color = color, dash="dot")
+  )
+}
+
+t <- list(
+  family = "sans serif",
+  size = 14,
+  color = 'blue')
+
+areacolor = 'rgba(153, 0, 0, 0.5)'
+areacolor2 = "rgba(255,102,102, 0.5)"
+barcolor = "rgb(153,0,0)"
+barcolor2 = "rgb(255,102,102)"
+areacolor3 = "rgba(255,204,153,0.5)"
+barcolor3 = "rgb(255,204,153)"
+####################### Observation loss ####################################
+
+fig0 = plot_ly(
+  x = range, 
+  y = obs_list, 
+  type = "bar",
+  marker = list(color = barcolor)
+  ) %>%
+  layout(
+    title = "", 
+    shapes = vline(2.5, color = "green"))
+fig0
+
+######################### Market Size #################################
+
+fig1 <-  plot_ly(
+  x = sales_by_year$year,
+  y = sales_by_year$tot_sales,
+  type = 'bar',
+  marker = list(color = barcolor)) %>%
+  layout(title = '',
+         plot_bgcolor='white', 
+         xaxis = list( 
+           zerolinecolor = 'white', 
+           zerolinewidth = 1
+           ), 
+         yaxis = list( 
+           zerolinecolor = 'white', 
+           zerolinewidth = 2, 
+           gridcolor = "rgb(192,192,192)")
+  )
+fig1
+
+########################## Market Competition ############################
+
+fig3 <-  plot_ly(
+  x = hhi_year$year,
+  y = hhi_year$hhi,
+  type = 'bar',
+  marker = list(color = barcolor)) %>%
+  layout(title = '',
+         plot_bgcolor='white', 
+         xaxis = list( 
+           title = "Year",
+           showgrid = FALSE,
+           zerolinecolor = "white"),
+         yaxis = list( 
+           title = "HH Index",
+           gridcolor = 'rgb(192,192,192)',
+           zerolinecolor = "white"))
+fig3
+
+##################### R&D vs Ads Spending ###############################
+
+fig5 <- plot_ly(
+  x = rd_ad_year$year,
+  y = rd_ad_year$rd/rd_ad_year$tot_spending, 
+  type = "bar",
+  name = "%R&D",
+  marker = list(
+    color = barcolor
+  ))
+fig5 <- fig5 %>% 
+  add_trace(
+    y = rd_ad_year$ad/rd_ad_year$tot_spending, 
+    name = "%Ad", 
+    marker = list(
+      color = barcolor2
+    ))
+fig5 <- fig5 %>% 
+  layout(
+    yaxis = list(
+      title = "% Spending"),
+    barmode = "group",
+    xaxis = list(
+      title = "Year"
+    ))
+
+fig5
+
+
+#ad ratio (lagged),
+#rd ratio (lagged),
+#hhi,
+#roa
+
+########################## Extra ############################
+
+fig6 <- plot_ly(
+  x = rd_ad_year$year,
+  y = rd_ad_year$rd_ratio*100,
+  type = "scatter",
+  mode = "lines",
+  fill = "tozeroy",
+  fillcolor = areacolor,
+  line = list(
+    width = 1,
+    color = barcolor          
+    )
+) %>%
+  layout(title = '',
+         plot_bgcolor='white', 
+         xaxis = list(
+           showgrid = FALSE,
+           zerolinecolor = 'white', 
+           zerolinewidth = 1
+         ), 
+         yaxis = list( 
+           zerolinecolor = 'white', 
+           zerolinewidth = 2, 
+           gridcolor = "rgb(192,192,192)")
+  )
+
+fig6
+
+fig7 <- plot_ly(
+  x = rd_ad_year$year,
+  y = rd_ad_year$ad_ratio*100,
+  type = "scatter",
+  mode = "lines",
+  fill = "tozeroy",
+  fillcolor = areacolor,
+  line = list(
+    width = 1.5,
+    color = barcolor)
+) %>%
+  layout(title = '',
+         plot_bgcolor='white', 
+         xaxis = list(
+           showgrid = FALSE,
+           zerolinecolor = 'white', 
+           zerolinewidth = 1
+         ), 
+         yaxis = list( 
+           zerolinecolor = 'white', 
+           zerolinewidth = 2, 
+           gridcolor = "rgb(192,192,192)")
+  )
+
+fig7 
+
+
+
+#lineplot with:
+  # rd spending
+  # ad spending
+  # other spending
+  # total
+
+
+fig8 <- plot_ly(
+  x = rd_ad_year$year,
+  y = rd_ad_year$ad_ratio*100,
+  name = "Ads",
+  type = "scatter",
+  mode = "lines",
+  fill = "tonexty",
+  fillcolor = areacolor2,
+  line = list(
+    width = 1.5,
+    color = barcolor2)
+) %>%
+  layout(title = '',
+         plot_bgcolor='white', 
+         xaxis = list(
+           showgrid = FALSE,
+           zerolinecolor = 'white', 
+           zerolinewidth = 1,
+           dtick = 5,
+           title = "Year"
+         ), 
+         yaxis = list( 
+           zerolinecolor = 'white', 
+           zerolinewidth = 2, 
+           gridcolor = "rgb(192,192,192)",
+           ticksuffix = "%")
+  )
+
+fig8 <- fig8 %>%
+  add_trace(
+    x = rd_ad_year$year,
+    y = rd_ad_year$rd_ratio*100,
+    name = "R&D",
+    type = "scatter",
+    mode = "lines",
+    fill = "tozeroy",
+    fillcolor = areacolor,
+    line = list(
+      width = 1,
+      color = barcolor     
+    )
+  ) %>%
+  add_trace(
+    x = rd_ad_year$year,
+    y = rd_ad_year$mkt_ratio*100,
+    name = "Other",
+    type = "scatter",
+    mode = "lines",
+    fill = "tozeroy",
+    fillcolor = areacolor3,
+    line = list(
+      width = 1,
+      color = barcolor3
+  ))
+
+fig8
 
